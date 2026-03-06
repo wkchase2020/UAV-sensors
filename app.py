@@ -198,7 +198,7 @@ def create_drone_3d(roll, pitch, yaw):
         y_circle = radius * np.sin(theta)
         
         x_all, y_all, z_all = [], [], []
-        i_all, j_all, k_all = []
+        i_all, j_all, k_all = [], [], []
         
         # 底面和顶面圆
         for t in [0, length]:
