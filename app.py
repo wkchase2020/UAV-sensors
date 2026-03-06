@@ -234,7 +234,7 @@ def create_drone_3d(roll, pitch, yaw):
         blade_width = 2.5
         
         x_all, y_all, z_all = [], [], []
-        i_all, j_all, k_all = []
+        i_all, j_all, k_all = [], [], []
         
         for blade in range(n_blades):
             angle = rotation_angle + blade * np.pi
