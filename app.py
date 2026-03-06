@@ -148,102 +148,361 @@ def generate_imu_data(noise, drift):
         'ax': ax, 'ay': ay, 'az': az
     }
 
-# 3D无人机模型可视化
+# 3D无人机模型可视化 - 改进版F450模型
 def create_drone_3d(roll, pitch, yaw):
-    """创建F450四旋翼3D模型"""
-    # F450机架尺寸（单位：cm）
-    arm_length = 22.5
-    body_size = 10
+    """创建更逼真的F450四旋翼3D模型，包含机臂、电机座、螺旋桨和起落架"""
     
-    # 机体坐标系下的四个电机位置
-    motors = np.array([
-        [arm_length, 0, 0],   # 前
-        [0, arm_length, 0],   # 右
-        [-arm_length, 0, 0],  # 后
-        [0, -arm_length, 0]   # 左
-    ])
+    # F450机架尺寸参数（单位：cm）
+    arm_length = 22.5      # 机臂长度
+    arm_radius = 1.2       # 机臂粗细（圆柱半径）
+    motor_height = 3       # 电机座高度
+    motor_radius = 2.5     # 电机座半径
+    prop_radius = 11       # 螺旋桨半径
+    center_size = 8        # 中心板大小
+    center_height = 1.5    # 中心板厚度
+    leg_length = 12        # 起落架长度
+    leg_angle = 25         # 起落架倾斜角度（度）
+    
+    fig = go.Figure()
     
     # 旋转矩阵
     r_rad, p_rad, y_rad = np.radians([roll, pitch, yaw])
-    
-    # 旋转矩阵计算
     R_x = np.array([[1, 0, 0], [0, np.cos(r_rad), -np.sin(r_rad)], [0, np.sin(r_rad), np.cos(r_rad)]])
     R_y = np.array([[np.cos(p_rad), 0, np.sin(p_rad)], [0, 1, 0], [-np.sin(p_rad), 0, np.cos(p_rad)]])
     R_z = np.array([[np.cos(y_rad), -np.sin(y_rad), 0], [np.sin(y_rad), np.cos(y_rad), 0], [0, 0, 1]])
     R = R_z @ R_y @ R_x
     
-    # 旋转后的电机位置
-    motors_rotated = (R @ motors.T).T
+    def rotate_point(p):
+        """旋转单个点"""
+        return (R @ np.array(p).T).T
     
-    # 机身中心点
-    center = np.array([0, 0, 0])
-    
-    fig = go.Figure()
-    
-    # 绘制机臂
-    for i, motor in enumerate(motors_rotated):
-        color = '#FF6B6B' if i % 2 == 0 else '#4ECDC4'  # 红绿电机区分
-        fig.add_trace(go.Scatter3d(
-            x=[center[0], motor[0]],
-            y=[center[1], motor[1]],
-            z=[center[2], motor[2]],
-            mode='lines',
-            line=dict(color='#2C3E50', width=8),
-            name=f'机臂{i+1}',
-            showlegend=False
-        ))
+    def create_cylinder(p1, p2, radius, color, name, n_segments=16):
+        """创建圆柱体（机臂、电机座等）"""
+        p1, p2 = np.array(p1), np.array(p2)
+        v = p2 - p1
+        length = np.linalg.norm(v)
+        v = v / length
         
-        # 电机
+        # 创建垂直于v的基向量
+        if abs(v[2]) < 0.9:
+            temp = np.array([0, 0, 1])
+        else:
+            temp = np.array([0, 1, 0])
+        u = np.cross(v, temp)
+        u = u / np.linalg.norm(u)
+        w = np.cross(v, u)
+        
+        # 生成圆柱体侧面
+        theta = np.linspace(0, 2*np.pi, n_segments)
+        x_circle = radius * np.cos(theta)
+        y_circle = radius * np.sin(theta)
+        
+        x_all, y_all, z_all = [], [], []
+        i_all, j_all, k_all = []
+        
+        # 底面和顶面圆
+        for t in [0, length]:
+            center = p1 + v * t
+            for i in range(n_segments):
+                x_all.append(center[0] + x_circle[i] * u[0] + y_circle[i] * w[0])
+                y_all.append(center[1] + x_circle[i] * u[1] + y_circle[i] * w[1])
+                z_all.append(center[2] + x_circle[i] * u[2] + y_circle[i] * w[2])
+        
+        # 创建三角面（侧面）
+        for i in range(n_segments):
+            i0 = i
+            i1 = (i + 1) % n_segments
+            i2 = i + n_segments
+            i3 = i1 + n_segments
+            
+            # 两个三角形组成一个四边形
+            i_all.extend([i0, i0])
+            j_all.extend([i1, i2])
+            k_all.extend([i2, i3])
+        
         fig.add_trace(go.Mesh3d(
-            x=[motor[0], motor[0]+2, motor[0]-2, motor[0]],
-            y=[motor[1], motor[1]+2, motor[1]-2, motor[1]],
-            z=[motor[2], motor[2], motor[2], motor[2]+1],
-            color=color,
-            opacity=0.8,
-            name=f'电机{i+1}'
+            x=x_all, y=y_all, z=z_all,
+            i=i_all, j=j_all, k=k_all,
+            color=color, opacity=0.9, name=name,
+            showscale=False, hoverinfo='name'
         ))
+    
+    def create_propeller(center, radius, color, rotation_angle, name):
+        """创建旋转的螺旋桨"""
+        center = np.array(center)
+        n_blades = 2
+        blade_width = 2.5
+        
+        x_all, y_all, z_all = [], [], []
+        i_all, j_all, k_all = []
+        
+        for blade in range(n_blades):
+            angle = rotation_angle + blade * np.pi
+            cos_a, sin_a = np.cos(angle), np.sin(angle)
+            
+            # 桨叶四个角点（局部坐标）
+            corners = [
+                [blade_width/2, 0, 0],
+                [-blade_width/2, 0, 0],
+                [-blade_width/3, radius, 0.3],
+                [blade_width/3, radius, 0.3]
+            ]
+            
+            # 旋转并转换到世界坐标
+            rotated_corners = []
+            for c in corners:
+                # 绕Z轴旋转
+                rx = c[0] * cos_a - c[1] * sin_a
+                ry = c[0] * sin_a + c[1] * cos_a
+                rz = c[2]
+                # 应用无人机姿态旋转
+                p = rotate_point([center[0] + rx, center[1] + ry, center[2] + rz])
+                rotated_corners.append(p)
+                x_all.append(p[0])
+                y_all.append(p[1])
+                z_all.append(p[2])
+            
+            # 中心点
+            idx = len(x_all)
+            p_center = rotate_point(center + [0, 0, 0.5])
+            x_all.append(p_center[0])
+            y_all.append(p_center[1])
+            z_all.append(p_center[2])
+            
+            # 创建两个三角形
+            i_all.extend([idx, idx, idx])
+            j_all.extend([idx-4, idx-3, idx-2])
+            k_all.extend([idx-3, idx-2, idx-1])
+        
+        fig.add_trace(go.Mesh3d(
+            x=x_all, y=y_all, z=z_all,
+            i=i_all, j=j_all, k=k_all,
+            color=color, opacity=0.7, name=name,
+            showscale=False
+        ))
+    
+    def create_center_plate():
+        """创建中心板（上下两层）"""
+        # 上下板的位置
+        z_offsets = [center_height/2, -center_height/2]
+        colors = ['#2C3E50', '#34495E']
+        
+        for z, color in zip(z_offsets, colors):
+            corners = [
+                [-center_size/2, -center_size/2, z],
+                [center_size/2, -center_size/2, z],
+                [center_size/2, center_size/2, z],
+                [-center_size/2, center_size/2, z]
+            ]
+            
+            # 旋转角点
+            rotated = [rotate_point(c) for c in corners]
+            x = [p[0] for p in rotated]
+            y = [p[1] for p in rotated]
+            z_vals = [p[2] for p in rotated]
+            
+            fig.add_trace(go.Mesh3d(
+                x=x, y=y, z=z_vals,
+                i=[0, 0], j=[1, 2], k=[2, 3],
+                color=color, opacity=0.95, name='中心板',
+                showscale=False
+            ))
+        
+        # 连接柱
+        pillar_positions = [
+            [center_size/3, center_size/3],
+            [center_size/3, -center_size/3],
+            [-center_size/3, center_size/3],
+            [-center_size/3, -center_size/3]
+        ]
+        
+        for px, py in pillar_positions:
+            p1 = rotate_point([px, py, center_height/2])
+            p2 = rotate_point([px, py, -center_height/2])
+            create_cylinder(p1, p2, 0.8, '#7F8C8D', '连接柱')
+    
+    def create_landing_gear():
+        """创建起落架"""
+        leg_positions = [
+            [center_size/2, center_size/2],
+            [center_size/2, -center_size/2],
+            [-center_size/2, center_size/2],
+            [-center_size/2, -center_size/2]
+        ]
+        
+        rad = np.radians(leg_angle)
+        cos_r, sin_r = np.cos(rad), np.sin(rad)
+        
+        for px, py in leg_positions:
+            # 起落架顶部（连接中心板）
+            top = np.array([px * 0.7, py * 0.7, -center_height/2])
+            
+            # 起落架底部（向外倾斜）
+            direction = np.array([px, py, 0])
+            direction = direction / np.linalg.norm(direction)
+            bottom = top + np.array([
+                direction[0] * leg_length * sin_r,
+                direction[1] * leg_length * sin_r,
+                -leg_length * cos_r
+            ])
+            
+            top_rot = rotate_point(top)
+            bottom_rot = rotate_point(bottom)
+            create_cylinder(top_rot, bottom_rot, 0.6, '#E74C3C', '起落架')
+        
+        # 起落架底部横杆
+        # 简化：用线条表示
+        for i, (px, py) in enumerate(leg_positions):
+            direction = np.array([px, py, 0])
+            direction = direction / np.linalg.norm(direction)
+            bottom = np.array([
+                px * 0.7 + direction[0] * leg_length * sin_r,
+                py * 0.7 + direction[1] * leg_length * sin_r,
+                -center_height/2 - leg_length * cos_r
+            ])
+            
+            # 相邻起落架连接
+            next_pos = leg_positions[(i+1) % 4]
+            next_px, next_py = next_pos
+            next_direction = np.array([next_px, next_py, 0])
+            next_direction = next_direction / np.linalg.norm(next_direction)
+            next_bottom = np.array([
+                next_px * 0.7 + next_direction[0] * leg_length * sin_r,
+                next_py * 0.7 + next_direction[1] * leg_length * sin_r,
+                -center_height/2 - leg_length * cos_r
+            ])
+            
+            b1 = rotate_point(bottom)
+            b2 = rotate_point(next_bottom)
+            
+            fig.add_trace(go.Scatter3d(
+                x=[b1[0], b2[0]], y=[b1[1], b2[1]], z=[b1[2], b2[2]],
+                mode='lines', line=dict(color='#C0392B', width=4),
+                name='起落架横杆', showlegend=False
+            ))
+    
+    # ========== 构建无人机 ==========
+    
+    # 电机位置和颜色（DJI经典红黑配色：前右红，前左红，后右黑，后左黑）
+    motor_configs = [
+        {'pos': [arm_length, 0, 0], 'arm_color': '#C0392B', 'prop_color': '#E74C3C', 'name': '前'},  # 前
+        {'pos': [0, arm_length, 0], 'arm_color': '#C0392B', 'prop_color': '#C0392B', 'name': '右'},  # 右
+        {'pos': [-arm_length, 0, 0], 'arm_color': '#2C3E50', 'prop_color': '#34495E', 'name': '后'}, # 后
+        {'pos': [0, -arm_length, 0], 'arm_color': '#2C3E50', 'prop_color': '#2C3E50', 'name': '左'}   # 左
+    ]
+    
+    # 旋转螺旋桨角度（模拟转动）
+    prop_rotation = time.time() * 10  # 旋转速度
+    
+    for i, config in enumerate(motor_configs):
+        # 机臂末端位置（旋转后）
+        arm_end = rotate_point(config['pos'])
+        center = rotate_point([0, 0, 0])
+        
+        # 绘制机臂（圆柱体）
+        create_cylinder(center, arm_end, arm_radius, '#2C3E50', f"机臂-{config['name']}")
+        
+        # 电机座位置
+        motor_base = arm_end
+        motor_top = rotate_point([
+            config['pos'][0], 
+            config['pos'][1], 
+            config['pos'][2] + motor_height
+        ])
+        
+        # 绘制电机座
+        create_cylinder(motor_base, motor_top, motor_radius, '#7F8C8D', f"电机座-{config['name']}")
+        
+        # 绘制螺旋桨（在电机座顶部）
+        create_propeller(
+            [config['pos'][0], config['pos'][1], config['pos'][2] + motor_height + 0.5],
+            prop_radius,
+            config['prop_color'],
+            prop_rotation if i % 2 == 0 else -prop_rotation,  # 相邻螺旋桨反向旋转
+            f"螺旋桨-{config['name']}"
+        )
     
     # 中心板
+    create_center_plate()
+    
+    # 起落架
+    create_landing_gear()
+    
+    # 飞控/电池（中心上方）
+    fc_points = []
+    for dx in [-2.5, 2.5]:
+        for dy in [-2, 2]:
+            for dz in [center_height/2 + 0.5, center_height/2 + 2.5]:
+                fc_points.append(rotate_point([dx, dy, dz]))
+    
+    # 简化的飞控盒子
+    fc_x = [p[0] for p in fc_points]
+    fc_y = [p[1] for p in fc_points]
+    fc_z = [p[2] for p in fc_points]
+    
     fig.add_trace(go.Mesh3d(
-        x=[-body_size/2, body_size/2, body_size/2, -body_size/2],
-        y=[-body_size/2, -body_size/2, body_size/2, body_size/2],
-        z=[0, 0, 0, 0],
-        color='#34495E',
-        opacity=0.9
+        x=fc_x, y=fc_y, z=fc_z,
+        i=[0, 0, 0, 4, 4, 4], 
+        j=[1, 2, 3, 5, 6, 7], 
+        k=[2, 3, 1, 6, 7, 5],
+        color='#3498DB', opacity=0.8, name='飞控'
     ))
     
-    # 坐标轴
-    axis_length = 15
-    # X轴（红色-前）
+    # 坐标轴指示（在右下角）
+    axis_origin = rotate_point([25, -25, -15])
+    axis_len = 8
+    
+    # X轴 - 红色
+    x_end = rotate_point([25 + axis_len, -25, -15])
     fig.add_trace(go.Scatter3d(
-        x=[0, axis_length], y=[0, 0], z=[0, 0],
-        mode='lines+text', line=dict(color='red', width=4),
-        text=['', '前(X)'], textposition='top center', showlegend=False
-    ))
-    # Y轴（绿色-右）
-    fig.add_trace(go.Scatter3d(
-        x=[0, 0], y=[0, axis_length], z=[0, 0],
-        mode='lines+text', line=dict(color='green', width=4),
-        text=['', '右(Y)'], textposition='top center', showlegend=False
-    ))
-    # Z轴（蓝色-下）
-    fig.add_trace(go.Scatter3d(
-        x=[0, 0], y=[0, 0], z=[0, -axis_length],
-        mode='lines+text', line=dict(color='blue', width=4),
-        text=['', '下(Z)'], textposition='top center', showlegend=False
+        x=[axis_origin[0], x_end[0]], y=[axis_origin[1], x_end[1]], z=[axis_origin[2], x_end[2]],
+        mode='lines+text', line=dict(color='#E74C3C', width=5),
+        text=['', 'X'], textposition='top center',
+        textfont=dict(color='#E74C3C', size=12),
+        showlegend=False
     ))
     
+    # Y轴 - 绿色
+    y_end = rotate_point([25, -25 + axis_len, -15])
+    fig.add_trace(go.Scatter3d(
+        x=[axis_origin[0], y_end[0]], y=[axis_origin[1], y_end[1]], z=[axis_origin[2], y_end[2]],
+        mode='lines+text', line=dict(color='#2ECC71', width=5),
+        text=['', 'Y'], textposition='top center',
+        textfont=dict(color='#2ECC71', size=12),
+        showlegend=False
+    ))
+    
+    # Z轴 - 蓝色
+    z_end = rotate_point([25, -25, -15 + axis_len])
+    fig.add_trace(go.Scatter3d(
+        x=[axis_origin[0], z_end[0]], y=[axis_origin[1], z_end[1]], z=[axis_origin[2], z_end[2]],
+        mode='lines+text', line=dict(color='#3498DB', width=5),
+        text=['', 'Z'], textposition='top center',
+        textfont=dict(color='#3498DB', size=12),
+        showlegend=False
+    ))
+    
+    # 布局设置
     fig.update_layout(
         scene=dict(
-            xaxis=dict(range=[-30, 30], title='X (cm)'),
-            yaxis=dict(range=[-30, 30], title='Y (cm)'),
-            zaxis=dict(range=[-30, 30], title='Z (cm)'),
+            xaxis=dict(range=[-35, 35], title='X (cm)', showgrid=True, gridcolor='lightgray'),
+            yaxis=dict(range=[-35, 35], title='Y (cm)', showgrid=True, gridcolor='lightgray'),
+            zaxis=dict(range=[-25, 25], title='Z (cm)', showgrid=True, gridcolor='lightgray'),
             aspectmode='cube',
-            camera=dict(eye=dict(x=1.5, y=1.5, z=1.0))
+            camera=dict(
+                eye=dict(x=1.8, y=1.8, z=1.2),
+                center=dict(x=0, y=0, z=0)
+            ),
+            bgcolor='#FAFAFA'
         ),
-        title="F450 3D姿态可视化",
-        height=600,
-        margin=dict(l=0, r=0, t=30, b=0)
+        title=dict(
+            text=f"🚁 F450 四旋翼无人机 | 姿态: Roll={roll:.1f}° Pitch={pitch:.1f}° Yaw={yaw:.1f}°",
+            x=0.5, font=dict(size=16)
+        ),
+        height=650,
+        margin=dict(l=0, r=0, t=40, b=0),
+        paper_bgcolor='white',
+        showlegend=False
     )
     
     return fig
